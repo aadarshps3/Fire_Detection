@@ -1,7 +1,4 @@
 import cv2
-import threading
-import playsound
-import smtplib
 import RPi.GPIO as GPIO
 import time
 from flask import Flask, Response
@@ -21,32 +18,6 @@ servo.start(0)  # Start with duty cycle 0
 # Fire detection setup
 fire_cascade = cv2.CascadeClassifier('fire_detection_cascade_model.xml')  # Adjust filename as needed
 cap = cv2.VideoCapture(0)  # Use 0 for built-in camera, 1 for USB camera
-
-# Global variable to track alarm/mail state
-runOnce = False
-
-
-# Function to play alarm sound
-def play_alarm_function():
-    playsound.playsound('fire_alarm.mp3', True)
-    print("Fire alarm end")
-
-
-# Function to send email alert
-def send_mail_function():
-    recipientmail = "recipient@example.com"  # Replace with recipient's email
-    sender_email = "sender@example.com"  # Replace with sender's email
-    sender_password = "yourpassword"  # Replace with sender's password
-    try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.ehlo()
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, recipientmail, "Warning: Fire accident has been reported")
-        print(f"Alert mail sent successfully to {recipientmail}")
-        server.close()
-    except Exception as e:
-        print(f"Email error: {e}")
 
 
 # Function to rotate servo based on direction
@@ -74,10 +45,10 @@ def control_solenoid(valve_state):
 
 # Function to generate video frames for streaming
 def generate_frames():
-    global runOnce
     while True:
         success, frame = cap.read()
         if not success:
+            print("Failed to capture frame")
             break
 
         # Convert frame to grayscale for fire detection
@@ -88,7 +59,7 @@ def generate_frames():
         for (x, y, w, h) in fires:
             # Draw rectangle around detected fire
             cv2.rectangle(frame, (x - 20, y - 20), (x + w + 20, y + h + 20), (255, 0, 0), 2)
-            print("Fire alarm initiated")
+            print("Fire detected")
 
             # Rotate servo based on fire position (assuming 640x480 resolution)
             if x < 320:  # Fire on left
@@ -98,23 +69,19 @@ def generate_frames():
             else:
                 rotate_servo("center")
 
-            # Trigger alarm and email only once
-            if not runOnce:
-                threading.Thread(target=play_alarm_function).start()
-                threading.Thread(target=send_mail_function).start()
-                runOnce = True
-
             # Open solenoid valve
             control_solenoid("open")
 
-        # If no fire detected, reset system after 10 seconds
-        if runOnce and not fire_detected:
-            time.sleep(10)  # Simulate fire suppression duration
+        # If no fire detected, close solenoid valve
+        if not fire_detected:
             control_solenoid("close")
-            runOnce = False
+            rotate_servo("center")  # Reset servo to center
 
         # Encode frame as JPEG for streaming
         ret, buffer = cv2.imencode('.jpg', frame)
+        if not ret:
+            print("Failed to encode frame")
+            continue
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
@@ -129,10 +96,12 @@ def video():
 # Main execution
 if __name__ == '__main__':
     try:
+        print("Starting Flask server...")
         app.run(host='0.0.0.0', port=5000)  # Run Flask server
-    except KeyboardInterrupt:
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
         cap.release()
         servo.stop()
         GPIO.cleanup()
         print("System shutdown")
-
