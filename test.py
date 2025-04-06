@@ -6,10 +6,14 @@ import time
 # Flask app initialization
 app = Flask(__name__)
 
-# GPIO setup for solenoid valve
+# GPIO setup for servo and solenoid valve
+SERVO_PIN = 17  # Servo motor GPIO pin
 VALVE_PIN = 23  # Solenoid valve (Relay) GPIO pin
 GPIO.setmode(GPIO.BCM)
+GPIO.setup(SERVO_PIN, GPIO.OUT)
 GPIO.setup(VALVE_PIN, GPIO.OUT)
+servo = GPIO.PWM(SERVO_PIN, 50)  # 50 Hz PWM frequency
+servo.start(0)  # Start with duty cycle 0
 GPIO.output(VALVE_PIN, GPIO.LOW)  # Ensure valve is initially closed
 
 # Fire detection setup
@@ -18,6 +22,14 @@ cap = cv2.VideoCapture(0)  # Use 0 for built-in camera, 1 for USB camera
 
 # Variable to track fire detection state
 fire_detected_previously = False
+
+
+# Function to set servo angle (converts angle to duty cycle)
+def set_servo_angle(angle):
+    duty_cycle = 2.5 + (angle / 18)  # Map 0-180 degrees to 2.5-12.5% duty cycle
+    servo.ChangeDutyCycle(duty_cycle)
+    time.sleep(0.5)  # Allow time for servo to move
+    servo.ChangeDutyCycle(0)  # Stop PWM signal
 
 
 # Function to control solenoid valve
@@ -51,12 +63,20 @@ def generate_frames():
             cv2.rectangle(frame, (x - 20, y - 20), (x + w + 20, y + h + 20), (255, 0, 0), 2)
             print("Fire detected")
 
-        # Control solenoid valve based on fire detection
-        if fire_detected and not fire_detected_previously:
-            # Fire just detected, open the valve
+            # Determine servo angle based on fire position (assuming 640x480 resolution)
+            if x < 320:  # Fire on left, rotate to 30 degrees
+                set_servo_angle(30)
+            elif x > 320:  # Fire on right, rotate to 150 degrees
+                set_servo_angle(150)
+            else:  # Fire near center, rotate to 90 degrees
+                set_servo_angle(90)
+
+            # Open solenoid valve to spray water
             control_solenoid("open")
-        elif not fire_detected and fire_detected_previously:
-            # Fire no longer detected, close the valve
+
+        # If no fire detected, reset servo and close valve
+        if not fire_detected and fire_detected_previously:
+            set_servo_angle(90)  # Return to center position
             control_solenoid("close")
 
         # Update the previous fire detection state
@@ -87,6 +107,8 @@ if __name__ == '__main__':
         print(f"Error: {e}")
     finally:
         cap.release()
-        GPIO.output(VALVE_PIN, GPIO.LOW)  # Ensure valve is closed on shutdown
+        set_servo_angle(90)  # Return servo to center on shutdown
+        control_solenoid("close")  # Ensure valve is closed on shutdown
+        servo.stop()
         GPIO.cleanup()
         print("System shutdown")
